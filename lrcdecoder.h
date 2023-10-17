@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#include <regex>
 
 typedef struct LyricWord {
 	std::wstring word;
@@ -22,6 +23,7 @@ typedef struct LyricLine {
 typedef struct LyricPacket {
 	std::vector<LyricLine> lyrics;
 	int64_t pts = 0;
+	bool Empty();
 } LyricPacket;
 
 class LrcDecoderPrivate;
