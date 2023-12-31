@@ -1,27 +1,5 @@
 ﻿#include "lrcdecoder.h"
 
-static const std::wstring MetaData[7][2] = {
-	{L"ti", L"title"},
-	{L"al", L"album"},
-	{L"ar", L"artist"},
-	{L"au", L"author"},
-	{L"by", L"creator"},
-	{L"re", L"encoder"},
-	{L"ve", L"encoder_version"}
-};
-
-static std::wstring findMeta(const std::wstring &tag) {
-	std::wstring data;
-	for (int i = 0; i < 7; ++i) {
-		if (tag == MetaData[i][0]) {
-			data = MetaData[i][1];
-			break;
-		}
-	}
-
-	return data;
-}
-
 class LrcDecoderPrivate
 {
 public:
@@ -136,20 +114,20 @@ size_t LrcDecoderPrivate::decodeHeader()
 
 	if (offset >= length) return offset;
 
-	while(offset < length) {
+	while (offset < length) {
 		std::wstring meta, data;
-		if (m_lrcData.at(offset) == '[') {
-			while(++offset < length && m_lrcData.at(offset) != ':') {
-				if (m_lrcData.at(offset) >= 'a' && m_lrcData.at(offset) <= 'z')
-					meta += m_lrcData.at(offset);
+		if (m_lrcData[offset] == '[') {
+			while (++offset < length && m_lrcData[offset] != ':') {
+				if (m_lrcData[offset] >= 'a' && m_lrcData[offset] <= 'z' || m_lrcData[offset] >= 'A' && m_lrcData[offset] <= 'Z')
+					meta += m_lrcData[offset];
 				else return offset - 1;
 			}
 
-			while(++offset < length && m_lrcData.at(offset) != ']') {
-				data += m_lrcData.at(offset);
+			while (++offset < length && m_lrcData[offset] != ']') {
+				data += m_lrcData[offset];
 			}
 
-			m_metadata[findMeta(meta)] = data;
+			m_metadata[meta] = data;
 		}
 
 		offset++;
@@ -158,49 +136,20 @@ size_t LrcDecoderPrivate::decodeHeader()
 	return offset;
 }
 
-/*
 void LrcDecoderPrivate::decodeLine()
 {
-	std::wregex pattern(LR"(\[(\d{1,9}):(\d{1,2}).(\d{1,3})\](.*))");
-	std::wsregex_iterator it(m_lrcData.begin(), m_lrcData.end(), pattern);
-	std::wsregex_iterator end;
-
-	std::wsmatch match;
-	std::wstring lrc;
-	std::wstring time;
-	struct lrcdata 
-	{
-		std::wstring time;
-		std::wstring lrc;
-	};
-	std::vector<lrcdata> data;
-
-	while (it != end) {
-		match = *it;
-		time = match.str();
-		++it;
-		if (it != end) {
-			match = *it;
-		}
-		lrc = match.prefix();
-		data.push_back({ time, lrc });
-	}
-}
-*/
-
-void LrcDecoderPrivate::decodeLine()
-{
-	std::wregex patternTime(LR"(\[(\d{1,9}):(\d{1,2}).(\d{1,3})\])");
+	std::wregex patternTime(LR"(\[(\d{1,9}):(\d{1,2}).(\d{1,3})\])", std::regex::nosubs);
 	std::wsregex_iterator itTime(m_lrcData.begin(), m_lrcData.end(), patternTime);
 	std::wsregex_iterator endTime;
 	std::wsmatch matchTime;
 	if (itTime != endTime) matchTime = *itTime;
-	std::wregex patternWTime(LR"(<(\d{1,9}):(\d{1,2}).(\d{1,3})>)");
+	std::wregex patternWTime(LR"(<(\d{1,9}):(\d{1,2}).(\d{1,3})>)", std::regex::nosubs);
 	std::wsregex_iterator itWTime(m_lrcData.begin(), m_lrcData.end(), patternWTime);
 	std::wsregex_iterator endWTime;
 	std::wsmatch matchWTime;
 	if (itWTime != endWTime) matchWTime = *itWTime;
 
+	bool begin = true;
 	size_t length = m_lrcData.length();
 	size_t offset = 0;
 	std::wstring time;
@@ -209,6 +158,9 @@ void LrcDecoderPrivate::decodeLine()
 	int64_t mult = 0;
 
 	std::wstring lrc;
+
+	int countMultTimes = 1;
+	std::vector<int> lrcMultTimes;
 
 	int timeJoinState = 0; //0.none 1.begin 2.time1 3.colon 4.time2 5.point 6.time3
 	int wtimeJoinState = 0; //0.none 1.begin 2.time1 3.colon 4.time2 5.point 6.time3
@@ -219,30 +171,45 @@ void LrcDecoderPrivate::decodeLine()
 
 	int64_t packetPts = 0;
 
-	LyricWord word;
-	LyricLine line;
-	LyricPacket packet;
+	LyricWord word{};
+	LyricLine line{};
+	LyricPacket packet{};
 
 	int addData = 0;
 
 	while (offset <= length) {
-		//if (offset == length ? true : (m_lrcData.at(offset) == '[')) {
 		if (offset == length ? true : offset == matchTime.position()) {
 			wtimeJoinState = 0;
 			timeJoinState = 1;
 			wordJoin = false;
 			addData = 0;
-			if (line.words.empty()) {
-				line.lyric = lrc;
+
+			if (!begin) {
+				if (line.words.empty()) {
+					line.lyric = lrc;
+				}
+				else {
+					for (size_t wi = 0; wi < line.words.size(); wi++) {
+						line.lyric += line.words[wi].word;
+					}
+				}
+				packet.lyrics.push_back(line);
+				packet.pts = packetPts;
+				m_lyrics.push_back(packet);
+				lrcMultTimes.push_back(m_lyrics.size() - 1);
+				if (countMultTimes == 0 && !lrcMultTimes.empty()) {
+					for (size_t it = 0; it < lrcMultTimes.size(); it++) {
+						m_lyrics[lrcMultTimes[it]].lyrics = m_lyrics[lrcMultTimes[lrcMultTimes.size() - 1]].lyrics;
+					}
+					lrcMultTimes.clear();
+				}
+				countMultTimes++;
 			}
 			else {
-				for (auto wi = line.words.begin(); wi < line.words.end(); wi++) {
-					line.lyric += wi->word;
-				}
+				packet.lyrics.push_back(line);
+				packet.pts = 0;
+				m_lyrics.push_back(packet);
 			}
-			packet.lyrics.push_back(line);
-			packet.pts = packetPts;
-			m_lyrics.push_back(packet);
 
 			packet.lyrics.clear();
 			line.words.clear();
@@ -252,11 +219,13 @@ void LrcDecoderPrivate::decodeLine()
 
 			if (itTime != endTime) ++itTime;
 			if (itTime != endTime) matchTime = *itTime;
+
+			begin = false;
 		}
-		//else if (m_lrcData.at(offset) == '<') {
 		else if (offset == matchWTime.position()) {
 			wtimeJoinState = 1;
 			addData = 0;
+			countMultTimes = 0;
 			if (wordJoin) {
 				word.word = lrc;
 				lrc.clear();
@@ -264,7 +233,7 @@ void LrcDecoderPrivate::decodeLine()
 			if (itWTime != endWTime) ++itWTime;
 			if (itWTime != endWTime) matchWTime = *itWTime;
 		}
-		else if (m_lrcData.at(offset) == ':' && (timeJoinState == 2 || wtimeJoinState == 2)) {
+		else if (m_lrcData[offset] == ':' && (timeJoinState == 2 || wtimeJoinState == 2)) {
 			//minute, = 60s * 1000ms
 			if (!time.empty()) {
 				if (timeJoinState == 2) timeJoinState = 3;
@@ -273,7 +242,7 @@ void LrcDecoderPrivate::decodeLine()
 			}
 			time.clear();
 		}
-		else if (m_lrcData.at(offset) == '.' && (timeJoinState == 4 || wtimeJoinState == 4)) {
+		else if (m_lrcData[offset] == '.' && (timeJoinState == 4 || wtimeJoinState == 4)) {
 			//second, = 1000 ms
 			if (!time.empty()) {
 				if (timeJoinState == 4) timeJoinState = 5;
@@ -282,7 +251,7 @@ void LrcDecoderPrivate::decodeLine()
 			}
 			time.clear();
 		}
-		else if (m_lrcData.at(offset) >= '0' && m_lrcData.at(offset) <= '9') {
+		else if (m_lrcData[offset] >= '0' && m_lrcData[offset] <= '9') {
 			if (addData == 0) {
 				if (timeJoinState == 1) timeJoinState = 2;
 				if (timeJoinState == 3) timeJoinState = 4;
@@ -290,10 +259,10 @@ void LrcDecoderPrivate::decodeLine()
 				if (wtimeJoinState == 1) wtimeJoinState = 2;
 				if (wtimeJoinState == 3) wtimeJoinState = 4;
 				if (wtimeJoinState == 5) wtimeJoinState = 6;
-				time += m_lrcData.at(offset);
+				time += m_lrcData[offset];
 			}
 		}
-		else if (m_lrcData.at(offset) == '>' && wtimeJoinState == 6) {
+		else if (m_lrcData[offset] == '>' && wtimeJoinState == 6) {
 			//10 millisecond
 			mult = time.length() == 3 ? 1 : (3 - time.length()) * 10;
 			if (!time.empty()) {
@@ -321,7 +290,7 @@ void LrcDecoderPrivate::decodeLine()
 			addData = wordJoin ? 1 : 0;
 			wtimeJoinState = 0;
 		}
-		else if (m_lrcData.at(offset) == ']' && timeJoinState == 6) {
+		else if (m_lrcData[offset] == ']' && timeJoinState == 6) {
 			//10 millisecond
 			mult = time.length() == 3 ? 1 : (3 - time.length()) * 10;
 			if (!time.empty()) {
@@ -331,12 +300,15 @@ void LrcDecoderPrivate::decodeLine()
 			packetPts = pts;
 			pts = 0;
 			time.clear();
-			addData = 1;
+			addData = offset + 1 == matchTime.position() ? 0 : 1;
 			timeJoinState = 0;
 		}
 		if (addData > 0) {
+			countMultTimes = 0;
 			if (addData == 2) {
-				lrc += m_lrcData.at(offset);
+				if (m_lrcData[offset] != '\n' && m_lrcData[offset] != '\r') {
+					lrc += m_lrcData[offset];
+				}
 			}
 			else {
 				addData++;
@@ -351,31 +323,29 @@ void LrcDecoderPrivate::decodeLine()
 void LrcDecoderPrivate::mergeLine()
 {
 	if (m_lyrics.empty()) return;
-	for (auto it1 = m_lyrics.begin() + 1; it1 < m_lyrics.end(); it1++)
-	{
-		for (auto it2 = m_lyrics.begin() + 1; it2 < m_lyrics.end(); it2++)
-		{
-			if (it2->pts == it1->pts && it2 != it1) {
-				if (!it2->lyrics.empty()) {
-					it1->lyrics.push_back(it2->lyrics[0]);
+	for (size_t it1 = 1; it1 < m_lyrics.size(); it1++) {
+		for (size_t it2 = 1; it2 < m_lyrics.size(); it2++) {
+			if (m_lyrics[it2].pts == m_lyrics[it1].pts && it2 != it1) {
+				for (size_t itlrc = 0; itlrc < m_lyrics[it2].lyrics.size(); itlrc++) {
+					m_lyrics[it1].lyrics.push_back(m_lyrics[it2].lyrics[itlrc]);
 				}
-				m_lyrics.erase(it2);
-				break;
+				m_lyrics.erase(m_lyrics.begin() + it2);
+				it2 = 1;
+				//it1 = 1;
+				//break;
 			}
 		}
 	}
+	std::sort(m_lyrics.begin(), m_lyrics.end(), [](const LyricPacket& p1, const LyricPacket& p2) {
+		return p1.pts < p2.pts;
+	});
 }
 
 bool LyricPacket::Empty()
 {
-	if (!lyrics.empty())
-	{
-		for (auto it = lyrics.begin(); it < lyrics.end(); it++)
-		{
-			if (!it->lyric.empty())
-			{
-				return false;
-			}
+	if (!lyrics.empty()) {
+		for (size_t it = 0; it < lyrics.size(); it++) {
+			if (!lyrics[it].lyric.empty()) return false;
 		}
 	}
 	return true;
