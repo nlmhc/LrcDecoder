@@ -39,7 +39,7 @@ public:
 	std::wstring GetMeta(const std::wstring &meta);
 	LyricPacket ReadPacket(int index);
 
-	int GetCount() const;
+	ptrdiff_t GetCount() const;
 	int64_t GetDuration() const;
 
 	std::wstring LastError() const;
