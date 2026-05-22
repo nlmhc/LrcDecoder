@@ -136,12 +136,12 @@ size_t LrcDecoderPrivate::decodeHeader()
 
 void LrcDecoderPrivate::decodeLine()
 {
-	std::wregex patternTime(LR"(\[(\d{1,9}):(\d{1,2})(.(\d{1,3}))*\])", std::regex::nosubs | std::regex::optimize);
+	std::wregex patternTime(LR"(\[(\d{1,9}:)*(\d{1,9}):(\d{1,2})(\.\d{1,3})*\])", std::regex::nosubs | std::regex::optimize);
 	std::wsregex_iterator itTime(m_lrcData.begin(), m_lrcData.end(), patternTime);
 	std::wsregex_iterator endTime;
 	std::wsmatch matchTime;
 	if (itTime != endTime) matchTime = *itTime;
-	std::wregex patternWTime(LR"(<(\d{1,9}):(\d{1,2})(.(\d{1,3}))*>)", std::regex::nosubs | std::regex::optimize);
+	std::wregex patternWTime(LR"(<(\d{1,9}:)*(\d{1,9}):(\d{1,2})(\.\d{1,3})*>)", std::regex::nosubs | std::regex::optimize);
 	std::wsregex_iterator itWTime(m_lrcData.begin(), m_lrcData.end(), patternWTime);
 	std::wsregex_iterator endWTime;
 	std::wsmatch matchWTime;
@@ -156,6 +156,7 @@ void LrcDecoderPrivate::decodeLine()
 	int64_t mult = 0;
 
 	std::wstring lrc;
+	bool nobeginspace = false;
 
 	int countMultTimes = 1;
 	std::vector<size_t> lrcMultTimes;
@@ -189,6 +190,7 @@ void LrcDecoderPrivate::decodeLine()
 	LyricPacket packet{};
 
 	int addData = 0;
+	bool addDataIsWord = false;
 
 	m_lyrics.reserve(length / 4);
 	packet.lyrics.reserve(256);
@@ -259,6 +261,7 @@ void LrcDecoderPrivate::decodeLine()
 			line.lyric.clear();
 			pts = 0;
 			lrc = L"";
+			nobeginspace = false;
 
 			if (itTime != endTime) ++itTime;
 			if (itTime != endTime) matchTime = *itTime;
@@ -272,6 +275,7 @@ void LrcDecoderPrivate::decodeLine()
 			if (wordJoin) {
 				word.word = lrc;
 				lrc = L"";
+				//nobeginspace = false;
 			}
 			if (itWTime != endWTime) ++itWTime;
 			if (itWTime != endWTime) matchWTime = *itWTime;
@@ -317,9 +321,13 @@ void LrcDecoderPrivate::decodeLine()
 		else if (m_lrcData[offset] == '>' && wtimeJoinState >= state::time2) {
 			if (wtimeJoinState == state::time4)
 				st_ms = stime;
-			else if (wtimeJoinState == state::time3)
-				st_s = stime;
-			else if (timeJoinState == state::time2) {
+			else if (wtimeJoinState == state::time3) {
+				st_ms = stime;
+				st_s = st_min;
+				st_min = st_h;
+				st_h = L"";
+			}
+			else if (wtimeJoinState == state::time2) {
 				st_s = stime;
 				st_min = st_h;
 				st_h = L"";
@@ -349,14 +357,19 @@ void LrcDecoderPrivate::decodeLine()
 			else {
 				wordJoin = true;
 			}
-			addData = wordJoin ? 1 : 0;
+			addData = 1;
+			addDataIsWord = true;
 			wtimeJoinState = state::none;
 		}
 		else if (m_lrcData[offset] == ']' && timeJoinState >= state::time2) {
 			if (timeJoinState == state::time4)
 				st_ms = stime;
-			else if (timeJoinState == state::time3)
-				st_s = stime;
+			else if (timeJoinState == state::time3) {
+				st_ms = stime;
+				st_s = st_min;
+				st_min = st_h;
+				st_h = L"";
+			}
 			else if (timeJoinState == state::time2) {
 				st_s = stime;
 				st_min = st_h;
@@ -368,14 +381,28 @@ void LrcDecoderPrivate::decodeLine()
 			packetPts = pts;
 			wordPtsOld2 = packetPts;
 			pts = 0;
-			addData = offset + 1 == matchTime.position() ? 0 : 1;
+			addData = 1;
+			addDataIsWord = false;
 			timeJoinState = state::none;
 		}
-		if (addData > 0) {
+		if (addData == 1 && timeJoinState == state::none && wtimeJoinState == state::none) {
+			if (addDataIsWord) {
+				if (wordJoin)
+					addData = 2;
+			}
+			else {
+				if (offset + 1 != matchTime.position())
+					addData = 2;
+			}
+		}
+		if (addData > 1) {
 			countMultTimes = 0;
-			if (addData == 2) {
-				if (m_lrcData[offset] != '\n' && m_lrcData[offset] != '\r') {
-					lrc.append(1, m_lrcData[offset]);
+			if (addData == 3) {
+				const auto& ld = m_lrcData[offset];
+				if (!nobeginspace && ld != ' ' && ld != '\t' && ld != '\v' && ld != '\f')
+					nobeginspace = true;
+				if (nobeginspace && ld != '\n' && ld != '\r') {
+					lrc.append(1, ld);
 				}
 			}
 			else {
