@@ -7,7 +7,6 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
-#include <regex>
 
 typedef struct LyricWord {
 	std::wstring word;

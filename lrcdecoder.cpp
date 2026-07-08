@@ -64,7 +64,7 @@ bool LrcDecoder::Load(const std::wstring& lrcData)
 	return true;
 }
 
-std::wstring LrcDecoder::GetMeta(const std::wstring &meta)
+std::wstring LrcDecoder::GetMeta(const std::wstring& meta)
 {
 	std::wstring data;
 	if (d->m_metadata.find(meta) != d->m_metadata.end())
@@ -108,7 +108,7 @@ size_t LrcDecoderPrivate::decodeHeader()
 	size_t offset = 0;
 	size_t length = m_lrcData.size();
 
-	if (offset >= length) 
+	if (offset >= length)
 		return offset;
 
 	while (offset < length) {
@@ -117,7 +117,7 @@ size_t LrcDecoderPrivate::decodeHeader()
 			while (++offset < length && m_lrcData[offset] != ':') {
 				if (m_lrcData[offset] >= 'a' && m_lrcData[offset] <= 'z' || m_lrcData[offset] >= 'A' && m_lrcData[offset] <= 'Z')
 					meta += m_lrcData[offset];
-				else 
+				else
 					return offset - 1;
 			}
 
@@ -136,17 +136,6 @@ size_t LrcDecoderPrivate::decodeHeader()
 
 void LrcDecoderPrivate::decodeLine()
 {
-	std::wregex patternTime(LR"(\[(\d{1,9}:)*(\d{1,9}):(\d{1,2})(\.\d{1,3})*\])", std::regex::nosubs | std::regex::optimize);
-	std::wsregex_iterator itTime(m_lrcData.begin(), m_lrcData.end(), patternTime);
-	std::wsregex_iterator endTime;
-	std::wsmatch matchTime;
-	if (itTime != endTime) matchTime = *itTime;
-	std::wregex patternWTime(LR"(<(\d{1,9}:)*(\d{1,9}):(\d{1,2})(\.\d{1,3})*>)", std::regex::nosubs | std::regex::optimize);
-	std::wsregex_iterator itWTime(m_lrcData.begin(), m_lrcData.end(), patternWTime);
-	std::wsregex_iterator endWTime;
-	std::wsmatch matchWTime;
-	if (itWTime != endWTime) matchWTime = *itWTime;
-
 	bool begin = true;
 	size_t length = m_lrcData.size();
 	size_t offset = 0;
@@ -154,6 +143,9 @@ void LrcDecoderPrivate::decodeLine()
 	std::wstring st_h, st_min, st_s, st_ms; // 时，分，秒，毫秒
 	int64_t pts = 0;
 	int64_t mult = 0;
+
+	size_t timetagPos = 0;
+	size_t wtimetagPos = 0;
 
 	std::wstring lrc;
 	bool nobeginspace = false;
@@ -200,7 +192,108 @@ void LrcDecoderPrivate::decodeLine()
 	lrc.reserve(512);
 	stime.reserve(32);
 
-	auto _st2ptr = [&]() {
+	auto _findTimeTag = [](const std::wstring& str, bool angle, size_t begin = 0) {
+		if (begin >= str.size())
+			return std::wstring::npos;
+
+		const auto lb = angle ? L'<' : L'[';
+		const auto rb = angle ? L'>' : L']';
+
+		for (size_t i = begin; i < str.size(); ++i) {
+			if (str[i] != lb)
+				continue;
+
+			size_t end = str.find(rb, i + 1);
+			if (end == std::wstring::npos)
+				break;
+
+			size_t a = i + 1, b = end - 1;
+			if (a > b)
+				continue;
+
+			size_t lastColon = str.rfind(L':', b);
+			if (lastColon == std::wstring::npos || lastColon < a)
+				continue;
+
+			bool ok = true;
+			size_t pos = a;
+			size_t colon = str.find(L':', pos);
+			while (colon != std::wstring::npos && colon < lastColon) {
+				size_t len = colon - pos;
+				if (len < 1 || len > 9) {
+					ok = false;
+					break;
+				}
+				for (size_t t = pos; t < colon; ++t) {
+					if (str[t] < L'0' || str[t] > L'9') {
+						ok = false;
+						break;
+					}
+				}
+				if (!ok)
+					break;
+				pos = colon + 1;
+				colon = str.find(L':', pos);
+			}
+			if (!ok)
+				continue;
+
+			size_t midLen = lastColon - pos;
+			if (midLen < 1 || midLen > 9)
+				continue;
+			for (size_t t = pos; t < lastColon; ++t) {
+				if (str[t] < L'0' || str[t] > L'9') {
+					ok = false;
+					break;
+				}
+			}
+			if (!ok)
+				continue;
+
+			size_t lastStart = lastColon + 1;
+			size_t lastLen = b - lastStart + 1;
+			if (lastLen < 1)
+				continue;
+
+			size_t dot = str.find(L'.', lastStart);
+			size_t firstPartLen = (dot == std::wstring::npos || dot > b) ? lastLen : dot - lastStart;
+			if (firstPartLen < 1 || firstPartLen > 2)
+				continue;
+			for (size_t t = lastStart; t < lastStart + firstPartLen; ++t) {
+				if (str[t] < L'0' || str[t] > L'9') {
+					ok = false;
+					break;
+				}
+			}
+			if (!ok)
+				continue;
+
+			size_t cur = dot;
+			while (cur != std::wstring::npos && cur <= b) {
+				size_t nextDot = str.find(L'.', cur + 1);
+				size_t partEnd = (nextDot == std::wstring::npos || nextDot > b) ? b + 1 : nextDot;
+				size_t partLen = partEnd - (cur + 1);
+				if (partLen < 1 || partLen > 3) {
+					ok = false;
+					break;
+				}
+				for (size_t t = cur + 1; t < partEnd; ++t) {
+					if (str[t] < L'0' || str[t] > L'9') {
+						ok = false;
+						break;
+					}
+				}
+				if (!ok)
+					break;
+				cur = nextDot;
+			}
+			if (ok)
+				return i;
+		}
+		return std::wstring::npos;
+		};
+
+	auto _st2pts = [&]() {
 		int64_t _pts = 0;
 		//毫秒
 		if (!st_ms.empty()) {
@@ -222,8 +315,10 @@ void LrcDecoderPrivate::decodeLine()
 		return _pts;
 		};
 
+	timetagPos = _findTimeTag(m_lrcData, false);
+	wtimetagPos = _findTimeTag(m_lrcData, true);
 	while (offset <= length) {
-		if (offset == length ? true : offset == matchTime.position()) {
+		if (offset == length ? true : offset == timetagPos) {
 			wtimeJoinState = state::none;
 			timeJoinState = state::begin;
 			wordJoin = false;
@@ -263,12 +358,11 @@ void LrcDecoderPrivate::decodeLine()
 			lrc = L"";
 			nobeginspace = false;
 
-			if (itTime != endTime) ++itTime;
-			if (itTime != endTime) matchTime = *itTime;
+			timetagPos = _findTimeTag(m_lrcData, false, timetagPos + 1);
 
 			begin = false;
 		}
-		else if (offset == matchWTime.position()) {
+		else if (offset == wtimetagPos) {
 			wtimeJoinState = state::begin;
 			addData = 0;
 			countMultTimes = 0;
@@ -277,8 +371,7 @@ void LrcDecoderPrivate::decodeLine()
 				lrc = L"";
 				//nobeginspace = false;
 			}
-			if (itWTime != endWTime) ++itWTime;
-			if (itWTime != endWTime) matchWTime = *itWTime;
+			wtimetagPos = _findTimeTag(m_lrcData, true, wtimetagPos + 1);
 		}
 		else if (m_lrcData[offset] == ':' && (timeJoinState == state::time1 || wtimeJoinState == state::time1)) {
 			st_h = stime;
@@ -333,7 +426,7 @@ void LrcDecoderPrivate::decodeLine()
 				st_h = L"";
 			}
 			stime = L"";
-			pts = _st2ptr();
+			pts = _st2pts();
 
 			if (wordJoin) {
 				wordPts2 = pts;
@@ -376,7 +469,7 @@ void LrcDecoderPrivate::decodeLine()
 				st_h = L"";
 			}
 			stime = L"";
-			pts = _st2ptr();
+			pts = _st2pts();
 
 			packetPts = pts;
 			wordPtsOld2 = packetPts;
@@ -391,7 +484,7 @@ void LrcDecoderPrivate::decodeLine()
 					addData = 2;
 			}
 			else {
-				if (offset + 1 != matchTime.position())
+				if (offset + 1 != timetagPos)
 					addData = 2;
 			}
 		}
@@ -434,7 +527,7 @@ void LrcDecoderPrivate::mergeLine()
 	}
 	std::sort(m_lyrics.begin(), m_lyrics.end(), [](const LyricPacket& p1, const LyricPacket& p2) {
 		return p1.pts < p2.pts;
-	});
+		});
 }
 
 bool LyricPacket::Empty()
